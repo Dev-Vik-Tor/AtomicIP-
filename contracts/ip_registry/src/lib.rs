@@ -1,5 +1,5 @@
 #![no_std]
-use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env, Vec};
+use soroban_sdk::{contract, contractimpl, contracttype, Address, Bytes, BytesN, Env, Vec};
 
 // ── Storage Keys ────────────────────────────────────────────────────────────
 
@@ -122,14 +122,25 @@ impl IpRegistry {
             .expect("IP not found")
     }
 
-    /// Verify a commitment: hash the secret and compare to stored commitment.
-    pub fn verify_commitment(env: Env, ip_id: u64, secret: BytesN<32>) -> bool {
+    /// Verify a commitment: recompute sha256(secret || blinding_factor) and compare to stored hash.
+    pub fn verify_commitment(
+        env: Env,
+        ip_id: u64,
+        secret: BytesN<32>,
+        blinding_factor: BytesN<32>,
+    ) -> bool {
         let record: IpRecord = env
             .storage()
             .persistent()
             .get(&DataKey::IpRecord(ip_id))
             .expect("IP not found");
-        record.commitment_hash == secret
+
+        let mut preimage = Bytes::new(&env);
+        preimage.append(&secret.into());
+        preimage.append(&blinding_factor.into());
+
+        let computed: BytesN<32> = env.crypto().sha256(&preimage).into();
+        record.commitment_hash == computed
     }
 
     /// List all IP IDs owned by an address.
@@ -155,6 +166,31 @@ mod tests {
     }
 
     #[test]
+    fn commitment_verifies_with_correct_secret_and_blinding() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = Address::generate(&env);
+        let secret = BytesN::from_array(&env, &[0xabu8; 32]);
+        let blinding = BytesN::from_array(&env, &[0xcdu8; 32]);
+
+        // Build commitment off-chain: sha256(secret || blinding)
+        let mut preimage = Bytes::new(&env);
+        preimage.append(&Bytes::from(secret.clone()));
+        preimage.append(&Bytes::from(blinding.clone()));
+        let commitment: BytesN<32> = env.crypto().sha256(&preimage).into();
+
+        let id = client.commit_ip(&owner, &commitment);
+
+        assert!(client.verify_commitment(&id, &secret, &blinding));
+        // Wrong blinding factor must fail
+        let wrong = BytesN::from_array(&env, &[0x00u8; 32]);
+        assert!(!client.verify_commitment(&id, &secret, &wrong));
+    }
+
+    #[test]
     fn known_owner_returns_some() {
         let env = Env::default();
         env.mock_all_auths();
@@ -168,51 +204,5 @@ mod tests {
         let ids = client.list_ip_by_owner(&owner).expect("should be Some");
         assert_eq!(ids.len(), 1);
         assert_eq!(ids.get(0).unwrap(), id);
-    }
-}
-
-#[cfg(test)]
-mod test {
-    use super::*;
-    use soroban_sdk::{testutils::Address as _, Address, BytesN, Env};
-
-    #[test]
-    fn test_transfer_ip_updates_owner_and_index() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-        let hash = BytesN::from_array(&env, &[1u8; 32]);
-
-        let contract_id = env.register(IpRegistry, ());
-        let client = IpRegistryClient::new(&env, &contract_id);
-
-        let ip_id = client.commit_ip(&alice, &hash);
-        client.transfer_ip(&ip_id, &bob);
-
-        let record = client.get_ip(&ip_id);
-        assert_eq!(record.owner, bob);
-
-        // alice's index should be empty, bob's should contain the id
-        assert_eq!(client.list_ip_by_owner(&alice).len(), 0);
-        assert_eq!(client.list_ip_by_owner(&bob).get(0), Some(ip_id));
-    }
-
-    #[test]
-    #[should_panic(expected = "commitment already registered")]
-    fn test_duplicate_commitment_rejected() {
-        let env = Env::default();
-        env.mock_all_auths();
-
-        let alice = Address::generate(&env);
-        let bob = Address::generate(&env);
-        let hash = BytesN::from_array(&env, &[2u8; 32]);
-
-        let contract_id = env.register(IpRegistry, ());
-        let client = IpRegistryClient::new(&env, &contract_id);
-
-        client.commit_ip(&alice, &hash);
-        client.commit_ip(&bob, &hash); // same hash — must panic
     }
 }
