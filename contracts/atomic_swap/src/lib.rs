@@ -5,6 +5,7 @@ use soroban_sdk::{contract, contractimpl, contracttype, Address, BytesN, Env};
 // ── Storage Keys ─────────────────────────────────────────────────────────────
 
 #[contracttype]
+#[derive(Debug, PartialEq)]
 pub enum DataKey {
     Swap(u64),
     NextId,
@@ -16,7 +17,7 @@ pub enum DataKey {
 // ── Types ─────────────────────────────────────────────────────────────────────
 
 #[contracttype]
-#[derive(Clone, PartialEq, Eq)]
+#[derive(Clone, PartialEq, Debug)]
 pub enum SwapStatus {
     Pending,
     Accepted,
@@ -112,12 +113,8 @@ impl AtomicSwap {
         };
 
         env.storage().persistent().set(&DataKey::Swap(id), &swap);
-        env.storage()
-            .persistent()
-            .set(&DataKey::ActiveSwap(ip_id), &id);
-        env.storage()
-            .instance()
-            .set(&DataKey::NextId, &(id + 1));
+        env.storage().persistent().extend_ttl(&DataKey::Swap(id), 50000, 50000);
+        env.storage().instance().set(&DataKey::NextId, &(id + 1));
         id
     }
 
@@ -137,9 +134,8 @@ impl AtomicSwap {
             .transfer(&swap.buyer, &env.current_contract_address(), &swap.price);
 
         swap.status = SwapStatus::Accepted;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Swap(swap_id), &swap);
+        env.storage().persistent().set(&DataKey::Swap(swap_id), &swap);
+        env.storage().persistent().extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
     }
 
     /// Seller reveals the decryption key; payment releases.
@@ -156,13 +152,8 @@ impl AtomicSwap {
         assert!(swap.status == SwapStatus::Accepted, "swap not accepted");
         // Full impl: verify key against IP commitment, then transfer escrowed payment.
         swap.status = SwapStatus::Completed;
-        env.storage()
-            .persistent()
-            .set(&DataKey::Swap(swap_id), &swap);
-        // Release the IP lock so a new swap can be created.
-        env.storage()
-            .persistent()
-            .remove(&DataKey::ActiveSwap(swap.ip_id));
+        env.storage().persistent().set(&DataKey::Swap(swap_id), &swap);
+        env.storage().persistent().extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
     }
 
     /// Cancel a swap (invalid key or timeout). Emits a `swap_cancelled` event
@@ -177,12 +168,7 @@ impl AtomicSwap {
         assert!(swap.status == SwapStatus::Pending, "only pending swaps can be cancelled this way");
         swap.status = SwapStatus::Cancelled;
         env.storage().persistent().set(&DataKey::Swap(swap_id), &swap);
-
-        // Emit cancellation event — only reached on successful state transition.
-        env.events().publish(
-            (symbol_short!("swp_cncld"),),
-            SwapCancelledEvent { swap_id, canceller },
-        );
+        env.storage().persistent().extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
     }
 
     /// Buyer cancels an Accepted swap after the expiry has passed and the seller
@@ -706,3 +692,6 @@ mod tests {
         assert_eq!(emitted_price, 500i128);
     }
 }
+
+#[cfg(test)]
+mod basic_tests;
