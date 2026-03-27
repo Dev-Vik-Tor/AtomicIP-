@@ -1,5 +1,5 @@
+use crate::{IpRecord, IpRegistry};
 use soroban_sdk::{Address, BytesN, Env, Vec};
-use crate::{IpRegistry, IpRecord};
 
 #[cfg(test)]
 mod tests {
@@ -23,7 +23,7 @@ mod tests {
         // Create test addresses using the test environment
         let owner1 = <Address as TestAddress>::generate(&env);
         let owner2 = <Address as TestAddress>::generate(&env);
-        
+
         // Create test commitment hashes
         let commitment1 = BytesN::from_array(&env, &[1u8; 32]);
         let commitment2 = BytesN::from_array(&env, &[2u8; 32]);
@@ -47,17 +47,17 @@ mod tests {
 
         assert_eq!(record1.owner, owner1);
         assert_eq!(record1.commitment_hash, commitment1);
-        
+
         assert_eq!(record2.owner, owner2);
         assert_eq!(record2.commitment_hash, commitment2);
-        
+
         assert_eq!(record3.owner, owner1);
         assert_eq!(record3.commitment_hash, commitment3);
 
         // Verify owner index is correct
         let owner1_ips = client.list_ip_by_owner(&owner1);
         let owner2_ips = client.list_ip_by_owner(&owner2);
-        
+
         assert_eq!(owner1_ips.len(), 2);
         assert_eq!(owner2_ips.len(), 1);
         assert_eq!(owner1_ips.get(0).unwrap(), id1);
