@@ -34,11 +34,30 @@ mod tests {
     }
 
     #[test]
-    fn test_swap_status_enum() {
-        assert_ne!(SwapStatus::Pending, SwapStatus::Accepted);
-        assert_ne!(SwapStatus::Accepted, SwapStatus::Completed);
-        assert_ne!(SwapStatus::Completed, SwapStatus::Cancelled);
-        assert_ne!(SwapStatus::Cancelled, SwapStatus::Pending);
+    fn test_swap_record_creation() {
+        let env = Env::default();
+        
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let price = 1000;
+        let ip_id = 1;
+        
+        // Test that we can create SwapRecord struct
+        let token = Address::generate(&env);
+        let swap = crate::SwapRecord {
+            ip_id,
+            seller: seller.clone(),
+            buyer: buyer.clone(),
+            price,
+            token,
+            expiry: 0,
+            status: crate::SwapStatus::Pending,
+        };
+        
+        assert_eq!(swap.seller, seller);
+        assert_eq!(swap.buyer, buyer);
+        assert_eq!(swap.price, price);
+        assert_eq!(swap.status, crate::SwapStatus::Pending);
     }
 
     /// SECURITY: only the seller may reveal the key.
