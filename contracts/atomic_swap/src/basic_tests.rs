@@ -34,7 +34,19 @@ mod tests {
     }
 
     #[test]
-    fn test_swap_record_creation() {
+    fn test_swap_status_enum() {
+        assert_ne!(SwapStatus::Pending, SwapStatus::Accepted);
+        assert_ne!(SwapStatus::Accepted, SwapStatus::Completed);
+        assert_ne!(SwapStatus::Completed, SwapStatus::Cancelled);
+        assert_ne!(SwapStatus::Cancelled, SwapStatus::Pending);
+    }
+
+    /// SECURITY: only the seller or buyer may cancel a swap.
+    /// Any other address must be rejected even with `mock_all_auths`, because
+    /// the identity check is an explicit assert that runs before `require_auth`.
+    #[test]
+    #[should_panic(expected = "only the seller or buyer can cancel")]
+    fn test_unauthorized_cancel_rejected() {
         let env = Env::default();
 
         let seller = Address::generate(&env);

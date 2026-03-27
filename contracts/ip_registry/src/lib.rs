@@ -30,6 +30,7 @@ pub enum DataKey {
 #[contracttype]
 #[derive(Clone)]
 pub struct IpRecord {
+    pub ip_id: u64,
     pub owner: Address,
     pub commitment_hash: BytesN<32>,
     pub timestamp: u64,
@@ -79,9 +80,13 @@ impl IpRegistry {
             "commitment already registered"
         );
 
-        let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+        // NextId lives in persistent storage so it survives contract upgrades.
+        // Instance storage is wiped on upgrade, which would reset the counter
+        // and cause ID collisions with existing IP records.
+        let id: u64 = env.storage().persistent().get(&DataKey::NextId).unwrap_or(0);
 
         let record = IpRecord {
+            ip_id: id,
             owner: owner.clone(),
             commitment_hash: commitment_hash.clone(),
             timestamp: env.ledger().timestamp(),
@@ -108,7 +113,8 @@ impl IpRegistry {
             .persistent()
             .extend_ttl(&DataKey::OwnerIps(owner.clone()), 50000, 50000);
 
-        env.storage().instance().set(&DataKey::NextId, &(id + 1));
+        env.storage().persistent().set(&DataKey::NextId, &(id + 1));
+        env.storage().persistent().extend_ttl(&DataKey::NextId, 50000, 50000);
 
         env.events().publish(
             (symbol_short!("ip_commit"), owner.clone()),
