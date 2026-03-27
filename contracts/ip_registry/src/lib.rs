@@ -164,7 +164,7 @@ impl IpRegistry {
         env: Env,
         ip_id: u64,
         secret: BytesN<32>,
-        blinding_factor: BytesN<32>,
+        _blinding_factor: BytesN<32>,
     ) -> bool {
         let record: IpRecord = env
             .storage()
