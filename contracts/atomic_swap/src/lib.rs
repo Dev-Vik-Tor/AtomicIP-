@@ -199,6 +199,13 @@ impl AtomicSwap {
             .persistent()
             .extend_ttl(&DataKey::Swap(swap_id), 50000, 50000);
 
+        // Transfer escrowed payment to seller (Issue #34)
+        token::Client::new(&env, &swap.token).transfer(
+            &env.current_contract_address(),
+            &swap.seller,
+            &swap.price,
+        );
+
         env.events().publish(
             (soroban_sdk::symbol_short!("key_reveal"),),
             KeyRevealedEvent {
@@ -275,6 +282,13 @@ impl AtomicSwap {
         env.storage()
             .persistent()
             .remove(&DataKey::ActiveSwap(swap.ip_id));
+
+        // Refund buyer's escrowed payment (Issue #35)
+        token::Client::new(&env, &swap.token).transfer(
+            &env.current_contract_address(),
+            &swap.buyer,
+            &swap.price,
+        );
     }
 
     /// Read a swap record. Returns `None` if the swap_id does not exist.
