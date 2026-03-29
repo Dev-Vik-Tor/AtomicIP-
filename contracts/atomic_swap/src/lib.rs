@@ -158,7 +158,7 @@ impl AtomicSwap {
             ));
         }
 
-        let id: u64 = env.storage().instance().get(&DataKey::NextId).unwrap_or(0);
+        let id: u64 = env.storage().persistent().get(&DataKey::NextId).unwrap_or(0);
 
         let swap = SwapRecord {
             ip_id,
@@ -207,7 +207,8 @@ impl AtomicSwap {
             .persistent()
             .extend_ttl(&DataKey::BuyerSwaps(swap.buyer.clone()), 50000, 50000);
 
-        env.storage().instance().set(&DataKey::NextId, &(id + 1));
+        env.storage().persistent().set(&DataKey::NextId, &(id + 1));
+        env.storage().persistent().extend_ttl(&DataKey::NextId, 50000, 50000);
         id
     }
 
