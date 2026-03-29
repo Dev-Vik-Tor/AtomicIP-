@@ -57,6 +57,7 @@ pub enum SwapStatus {
 #[derive(Debug, Serialize, Deserialize, ToSchema)]
 pub struct SwapRecord {
     pub ip_id: u64,
+    pub ip_registry_id: String,
     pub seller: String,
     pub buyer: String,
     /// Price in stroops (1 XLM = 10_000_000 stroops)
