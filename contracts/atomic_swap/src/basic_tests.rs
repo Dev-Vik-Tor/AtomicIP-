@@ -286,4 +286,24 @@ mod tests {
         let swap_id = client.initiate_swap(&registry_id, &ip_id, &seller, &500_i128, &buyer);
         client.cancel_expired_swap(&swap_id, &buyer);
     }
+
+    /// Issue #71: initiate_swap with non-existent ip_id should panic
+    #[test]
+    #[should_panic(expected = "HostError: Error(Contract, #1)")]
+    fn test_initiate_swap_with_non_existent_ip_id_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let seller = soroban_sdk::Address::generate(&env);
+        let buyer = soroban_sdk::Address::generate(&env);
+        let admin = soroban_sdk::Address::generate(&env);
+
+        let registry_id = env.register(IpRegistry, ());
+        let token_id = env.register_stellar_asset_contract(admin.clone());
+        let contract_id = env.register(AtomicSwap, ());
+        let client = AtomicSwapClient::new(&env, &contract_id);
+
+        // ip_id 9999 does not exist in the registry — must panic with IpNotFound (code 1)
+        client.initiate_swap(&registry_id, &token_id, &9999u64, &seller, &500_i128, &buyer);
+    }
 }
