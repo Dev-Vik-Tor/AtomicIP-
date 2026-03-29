@@ -74,12 +74,23 @@ pub struct SwapCancelledEvent {
     pub canceller: Address,
 }
 
-/// Payload published when a key is successfully revealed and the swap completes.
+/// Payload published when a swap is successfully revealed and the swap completes.
 #[contracttype]
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyRevealedEvent {
     pub swap_id: u64,
     pub decryption_key: BytesN<32>,
+}
+
+/// Payload published when a new swap is successfully initiated.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapInitiatedEvent {
+    pub swap_id: u64,
+    pub ip_id: u64,
+    pub seller: Address,
+    pub buyer: Address,
+    pub price: i128,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -208,6 +219,18 @@ impl AtomicSwap {
             .extend_ttl(&DataKey::BuyerSwaps(swap.buyer.clone()), 50000, 50000);
 
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("swap_init"),),
+            SwapInitiatedEvent {
+                swap_id: id,
+                ip_id,
+                seller: swap.seller.clone(),
+                buyer: swap.buyer.clone(),
+                price,
+            },
+        );
+
         id
     }
 
