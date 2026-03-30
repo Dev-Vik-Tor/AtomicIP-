@@ -349,6 +349,30 @@ mod tests {
         );
     }
 
+    /// Issue #74: cancel_swap after reveal_key should panic (swap already finalised).
+    #[test]
+    #[should_panic(expected = "Error(Contract, #10)")]
+    fn test_cancel_swap_after_reveal_key_panics() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let (registry_id, ip_id, secret, blinding_factor) = setup_registry(&env, &seller);
+        let token_id = setup_token(&env, &admin, &buyer, 1000);
+
+        let contract_id = setup_swap(&env, &registry_id);
+        let client = AtomicSwapClient::new(&env, &contract_id);
+
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        client.accept_swap(&swap_id);
+        client.reveal_key(&swap_id, &seller, &secret, &blinding_factor);
+
+        // Swap is Completed, cancel_swap should panic.
+        client.cancel_swap(&swap_id, &seller);
+    }
+
     #[test]
     #[should_panic(expected = "Error(Contract, #11)")]
     fn test_cancel_expired_swap_pending_state_rejected() {
