@@ -484,4 +484,22 @@ mod tests {
         assert_eq!(record.owner, bob);
         assert_ne!(record.owner, alice);
     }
+
+    #[test]
+    fn test_commitment_timestamp_accuracy() {
+        let env = Env::default();
+        let contract_id = env.register(IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = Address::generate(&env);
+        let commitment = BytesN::from_array(&env, &[42u8; 32]);
+
+        env.mock_all_auths();
+
+        let recorded_time = env.ledger().timestamp();
+        let ip_id = client.commit_ip(&owner, &commitment);
+        let record = client.get_ip(&ip_id);
+
+        assert_eq!(record.timestamp, recorded_time);
+    }
 }
