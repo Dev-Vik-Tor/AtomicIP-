@@ -354,6 +354,12 @@ impl IpRegistry {
     /// Returns a vector of all IP IDs owned by the specified address.
     /// Returns an empty vector if the address has never committed any IP.
     ///
+    /// # Performance
+    ///
+    /// This function is optimized to read only the ID list from storage,
+    /// not the full IP records. Callers can fetch individual records
+    /// using `get_ip()` only for IDs they need.
+    ///
     /// # Arguments
     ///
     /// * `env` - The Soroban environment
