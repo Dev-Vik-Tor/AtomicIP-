@@ -11,6 +11,8 @@ mod test;
 
 // ── Error Codes ────────────────────────────────────────────────────────────
 
+#[contracterror]
+#[derive(Copy, Clone, Debug, Eq, PartialEq, PartialOrd, Ord)]
 #[repr(u32)]
 pub enum ContractError {
     IpNotFound = 1,
@@ -97,7 +99,7 @@ impl IpRegistry {
     /// Therefore: a caller cannot forge `owner` in production. They can only
     /// commit IP under an address for which they hold a valid private key or
     /// delegated authorization.
-    pub fn commit_ip(env: Env, owner: Address, commitment_hash: BytesN<32>) -> u64 {
+    pub fn commit_ip(env: Env, owner: Address, commitment_hash: BytesN<32>) -> Result<u64, ContractError> {
         // Enforced by the Soroban host: panics if the transaction does not carry
         // a valid authorization for `owner`. This is the correct auth pattern.
         owner.require_auth();
@@ -348,6 +350,8 @@ impl IpRegistry {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::IpRecord(ip_id), 50000, 50000);
+        
+        Ok(())
     }
 
     /// Revoke an IP record, marking it as invalid.
@@ -371,6 +375,27 @@ impl IpRegistry {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::IpRecord(ip_id), 50000, 50000);
+        Ok(())
+    }
+
+    /// Admin-only contract upgrade.
+    ///
+    /// # Panics
+    ///
+    /// Panics if caller is not admin or admin not initialized.
+    pub fn upgrade(env: Env, new_wasm_hash: Bytes) -> Result<(), ContractError> {
+        let admin_opt = env.storage().persistent().get(&DataKey::Admin);
+        if admin_opt.is_none() {
+            return Err(ContractError::UnauthorizedUpgrade);
+        }
+        let admin = admin_opt.unwrap();
+        let invoker = env.invoker();
+        if invoker != admin {
+            return Err(ContractError::UnauthorizedUpgrade);
+        }
+        admin.require_auth();
+        env.deployer().update_current_contract_wasm(new_wasm_hash);
+        Ok(())
     }
 
     /// Admin-only contract upgrade.
@@ -456,7 +481,7 @@ impl IpRegistry {
         preimage.append(&blinding_factor.into());
         let computed_hash: BytesN<32> = env.crypto().sha256(&preimage).into();
 
-        record.commitment_hash == computed_hash
+        Ok(record.commitment_hash == computed_hash)
     }
 
     /// List all IP IDs owned by an address.
