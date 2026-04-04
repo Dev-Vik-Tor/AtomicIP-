@@ -2,17 +2,15 @@
 mod tests {
     use ip_registry::{IpRegistry, IpRegistryClient};
     use soroban_sdk::{
-        testutils::{Address as _, Ledger},
+        testutils::{Address as _, Events, Ledger},
         token::{Client as TokenClient, StellarAssetClient},
-        Address, BytesN, Env,
+        Address, BytesN, Env, IntoVal,
     };
 
     use crate::{AtomicSwap, AtomicSwapClient, DataKey, SwapStatus, KeyRevealedEvent, SwapCancelledEvent};
 
     // ── Helpers ───────────────────────────────────────────────────────────────
 
-    /// Register IpRegistry, commit an IP with a known secret+blinding_factor.
-    /// Returns (registry_id, ip_id, secret, blinding_factor).
     fn setup_registry(
         env: &Env,
         owner: &Address,
@@ -30,14 +28,6 @@ mod tests {
 
         let ip_id = registry.commit_ip(owner, &commitment_hash);
         (registry_id, ip_id, secret, blinding_factor)
-    }
-
-    fn setup_token(env: &Env, admin: &Address, recipient: &Address, amount: i128) -> Address {
-        let token_id = env
-            .register_stellar_asset_contract_v2(admin.clone())
-            .address();
-        StellarAssetClient::new(env, &token_id).mint(recipient, &amount);
-        token_id
     }
 
     fn setup_swap(env: &Env, registry_id: &Address) -> Address {
