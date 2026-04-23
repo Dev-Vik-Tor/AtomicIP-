@@ -21,6 +21,9 @@ pub enum ContractError {
     IpAlreadyRevoked = 4,
     UnauthorizedUpgrade = 5,
     Unauthorized = 6,
+    IpExpired = 7,
+    MetadataTooLarge = 8,
+    LicenseeNotFound = 9,
 }
 
 // ── TTL ───────────────────────────────────────────────────────────────────────
@@ -28,6 +31,9 @@ pub enum ContractError {
 /// Minimum ledger TTL bump applied to every persistent storage write.
 /// ~1 year at ~5s per ledger: 365 * 24 * 3600 / 5 ≈ 6_307_200 ledgers.
 pub const LEDGER_BUMP: u32 = 6_307_200;
+
+/// Maximum metadata size: 1 KB
+pub const MAX_METADATA_BYTES: u32 = 1024;
 
 // ── Storage Keys ────────────────────────────────────────────────────────────
 
@@ -39,6 +45,7 @@ pub enum DataKey {
     NextId,
     CommitmentOwner(BytesN<32>), // tracks which owner already holds a commitment hash
     Admin,
+    IpLicenses(u64),             // Vec<LicenseEntry> for an IP
 }
 
 // ── Types ────────────────────────────────────────────────────────────────────
@@ -51,6 +58,15 @@ pub struct IpRecord {
     pub commitment_hash: BytesN<32>,
     pub timestamp: u64,
     pub revoked: bool,
+    pub expiry_timestamp: u64,   // 0 = no expiry
+    pub metadata: Bytes,         // max 1 KB; empty = no metadata
+}
+
+#[contracttype]
+#[derive(Clone)]
+pub struct LicenseEntry {
+    pub licensee: Address,
+    pub terms_hash: BytesN<32>,
 }
 
 // ── Contract ─────────────────────────────────────────────────────────────────
@@ -134,6 +150,8 @@ impl IpRegistry {
             commitment_hash: commitment_hash.clone(),
             timestamp: env.ledger().timestamp(),
             revoked: false,
+            expiry_timestamp: 0,
+            metadata: Bytes::new(&env),
         };
 
         env.storage()
@@ -369,6 +387,11 @@ impl IpRegistry {
     ) -> bool {
         let record = require_ip_exists(&env, ip_id);
 
+        // Reject if expired
+        if record.expiry_timestamp != 0 && env.ledger().timestamp() > record.expiry_timestamp {
+            env.panic_with_error(Error::from_contract_error(ContractError::IpExpired as u32));
+        }
+
         // Concatenate secret || blinding_factor into Bytes, then SHA256
         let mut preimage = soroban_sdk::Bytes::new(&env);
         preimage.append(&secret.into());
@@ -437,6 +460,86 @@ impl IpRegistry {
         } else {
             false
         }
+    }
+
+    /// Set or update the expiry timestamp for an IP. Owner-only.
+    /// Pass 0 to remove expiry.
+    pub fn set_ip_expiry(env: Env, ip_id: u64, expiry_timestamp: u64) {
+        let mut record = require_ip_exists(&env, ip_id);
+        record.owner.require_auth();
+        record.expiry_timestamp = expiry_timestamp;
+        env.storage().persistent().set(&DataKey::IpRecord(ip_id), &record);
+        env.storage().persistent().extend_ttl(&DataKey::IpRecord(ip_id), LEDGER_BUMP, LEDGER_BUMP);
+    }
+
+    /// Set or update metadata for an IP (max 1 KB). Owner-only.
+    pub fn set_ip_metadata(env: Env, ip_id: u64, metadata: Bytes) {
+        if metadata.len() > MAX_METADATA_BYTES {
+            env.panic_with_error(Error::from_contract_error(ContractError::MetadataTooLarge as u32));
+        }
+        let mut record = require_ip_exists(&env, ip_id);
+        record.owner.require_auth();
+        record.metadata = metadata;
+        env.storage().persistent().set(&DataKey::IpRecord(ip_id), &record);
+        env.storage().persistent().extend_ttl(&DataKey::IpRecord(ip_id), LEDGER_BUMP, LEDGER_BUMP);
+    }
+
+    /// Grant a license for an IP to a licensee. Owner-only.
+    pub fn grant_license(env: Env, ip_id: u64, licensee: Address, terms_hash: BytesN<32>) {
+        let record = require_ip_exists(&env, ip_id);
+        record.owner.require_auth();
+
+        let mut licenses: Vec<LicenseEntry> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::IpLicenses(ip_id))
+            .unwrap_or(Vec::new(&env));
+
+        // Replace existing entry for this licensee, or append
+        let mut found = false;
+        for i in 0..licenses.len() {
+            if licenses.get(i).unwrap().licensee == licensee {
+                licenses.set(i, LicenseEntry { licensee: licensee.clone(), terms_hash: terms_hash.clone() });
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            licenses.push_back(LicenseEntry { licensee, terms_hash });
+        }
+
+        env.storage().persistent().set(&DataKey::IpLicenses(ip_id), &licenses);
+        env.storage().persistent().extend_ttl(&DataKey::IpLicenses(ip_id), LEDGER_BUMP, LEDGER_BUMP);
+    }
+
+    /// Revoke a license for an IP from a licensee. Owner-only.
+    pub fn revoke_license(env: Env, ip_id: u64, licensee: Address) {
+        let record = require_ip_exists(&env, ip_id);
+        record.owner.require_auth();
+
+        let mut licenses: Vec<LicenseEntry> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::IpLicenses(ip_id))
+            .unwrap_or(Vec::new(&env));
+
+        if let Some(pos) = licenses.iter().position(|e| e.licensee == licensee) {
+            licenses.remove(pos as u32);
+        } else {
+            env.panic_with_error(Error::from_contract_error(ContractError::LicenseeNotFound as u32));
+        }
+
+        env.storage().persistent().set(&DataKey::IpLicenses(ip_id), &licenses);
+        env.storage().persistent().extend_ttl(&DataKey::IpLicenses(ip_id), LEDGER_BUMP, LEDGER_BUMP);
+    }
+
+    /// Get all licenses for an IP.
+    pub fn get_licenses(env: Env, ip_id: u64) -> Vec<LicenseEntry> {
+        require_ip_exists(&env, ip_id);
+        env.storage()
+            .persistent()
+            .get(&DataKey::IpLicenses(ip_id))
+            .unwrap_or(Vec::new(&env))
     }
 }
 

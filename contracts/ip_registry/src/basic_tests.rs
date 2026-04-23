@@ -43,6 +43,8 @@ mod tests {
             commitment_hash,
             timestamp,
             revoked: false,
+            expiry_timestamp: 0,
+            metadata: soroban_sdk::Bytes::new(&env),
         };
 
         assert_eq!(record.owner, owner);
