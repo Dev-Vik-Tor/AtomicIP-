@@ -21,6 +21,13 @@ mod tests {
         fn transfer_ip(env: Env, ip_id: u64, new_owner: Address);
         fn revoke_ip(env: Env, ip_id: u64);
         fn is_ip_owner(env: Env, ip_id: u64, address: Address) -> bool;
+        fn reveal_partial(
+            env: Env,
+            ip_id: u64,
+            partial_hash: BytesN<32>,
+            blinding_factor: BytesN<32>,
+        ) -> bool;
+        fn get_partial_disclosure(env: Env, ip_id: u64) -> Option<BytesN<32>>;
     }
 
     #[test]
@@ -364,5 +371,119 @@ mod tests {
 
         // Non-existent IP should return false
         assert!(!client.is_ip_owner(&999u64, &alice));
+    }
+
+    // ── Partial Disclosure Tests ──────────────────────────────────────────────
+
+    fn make_commitment(env: &Env, partial_hash: &BytesN<32>, blinding: &BytesN<32>) -> BytesN<32> {
+        let mut preimage = soroban_sdk::Bytes::new(env);
+        preimage.append(&soroban_sdk::Bytes::from(partial_hash.clone()));
+        preimage.append(&soroban_sdk::Bytes::from(blinding.clone()));
+        env.crypto().sha256(&preimage).into()
+    }
+
+    #[test]
+    fn test_reveal_partial_valid_proof_returns_true_and_stores() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = <Address as TestAddress>::generate(&env);
+        let partial_hash = BytesN::from_array(&env, &[0xabu8; 32]);
+        let blinding = BytesN::from_array(&env, &[0xcdu8; 32]);
+        let commitment = make_commitment(&env, &partial_hash, &blinding);
+
+        let ip_id = client.commit_ip(&owner, &commitment);
+
+        // Valid proof: returns true
+        assert!(client.reveal_partial(&ip_id, &partial_hash, &blinding));
+
+        // Partial hash is now publicly retrievable
+        assert_eq!(client.get_partial_disclosure(&ip_id), Some(partial_hash));
+    }
+
+    #[test]
+    fn test_reveal_partial_wrong_blinding_returns_false() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = <Address as TestAddress>::generate(&env);
+        let partial_hash = BytesN::from_array(&env, &[0x11u8; 32]);
+        let blinding = BytesN::from_array(&env, &[0x22u8; 32]);
+        let wrong_blinding = BytesN::from_array(&env, &[0x33u8; 32]);
+        let commitment = make_commitment(&env, &partial_hash, &blinding);
+
+        let ip_id = client.commit_ip(&owner, &commitment);
+
+        // Wrong blinding factor: proof fails
+        assert!(!client.reveal_partial(&ip_id, &partial_hash, &wrong_blinding));
+
+        // Nothing stored
+        assert_eq!(client.get_partial_disclosure(&ip_id), None);
+    }
+
+    #[test]
+    fn test_reveal_partial_wrong_partial_hash_returns_false() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = <Address as TestAddress>::generate(&env);
+        let partial_hash = BytesN::from_array(&env, &[0x44u8; 32]);
+        let blinding = BytesN::from_array(&env, &[0x55u8; 32]);
+        let wrong_partial = BytesN::from_array(&env, &[0x66u8; 32]);
+        let commitment = make_commitment(&env, &partial_hash, &blinding);
+
+        let ip_id = client.commit_ip(&owner, &commitment);
+
+        assert!(!client.reveal_partial(&ip_id, &wrong_partial, &blinding));
+        assert_eq!(client.get_partial_disclosure(&ip_id), None);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_reveal_partial_requires_owner_auth() {
+        let env = Env::default();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = <Address as TestAddress>::generate(&env);
+        let attacker = <Address as TestAddress>::generate(&env);
+        let partial_hash = BytesN::from_array(&env, &[0x77u8; 32]);
+        let blinding = BytesN::from_array(&env, &[0x88u8; 32]);
+        let commitment = make_commitment(&env, &partial_hash, &blinding);
+
+        env.mock_all_auths();
+        let ip_id = client.commit_ip(&owner, &commitment);
+
+        // Only mock attacker's auth — must panic
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "reveal_partial",
+                args: (ip_id, partial_hash.clone(), blinding.clone()).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.reveal_partial(&ip_id, &partial_hash, &blinding);
+    }
+
+    #[test]
+    fn test_get_partial_disclosure_none_before_reveal() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = <Address as TestAddress>::generate(&env);
+        let commitment = BytesN::from_array(&env, &[0x99u8; 32]);
+        let ip_id = client.commit_ip(&owner, &commitment);
+
+        assert_eq!(client.get_partial_disclosure(&ip_id), None);
     }
 }
