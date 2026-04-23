@@ -1,8 +1,11 @@
-use axum::{routing::get, routing::post, Router};
+use axum::{extract::ConnectInfo, routing::get, routing::post, Router};
+use axum::middleware;
+use std::net::SocketAddr;
 use utoipa::OpenApi;
 use utoipa_swagger_ui::SwaggerUi;
 
 mod handlers;
+mod rate_limit;
 mod schemas;
 
 #[derive(OpenApi)]
@@ -62,10 +65,13 @@ async fn main() {
         .route("/swap/{swap_id}/reveal", post(handlers::reveal_key))
         .route("/swap/{swap_id}/cancel", post(handlers::cancel_swap))
         .route("/swap/{swap_id}/cancel-expired", post(handlers::cancel_expired_swap))
-        .route("/swap/{swap_id}", get(handlers::get_swap));
+        .route("/swap/{swap_id}", get(handlers::get_swap))
+        .layer(middleware::from_fn(rate_limit::layer));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     println!("Swagger UI   -> http://localhost:8080/docs");
     println!("OpenAPI JSON -> http://localhost:8080/openapi.json");
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app.into_make_service_with_connect_info::<SocketAddr>())
+        .await
+        .unwrap();
 }
