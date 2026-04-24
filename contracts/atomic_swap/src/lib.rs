@@ -4,7 +4,7 @@ mod swap;
 mod utils;
 
 use soroban_sdk::{
-    contract, contracterror, contractimpl, contracttype, token, Address, BytesN, Env, Error, Vec,
+    contract, contracterror, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, Error, Vec,
 };
 
 mod validation;
@@ -145,6 +145,8 @@ pub struct SwapCancelledEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyRevealedEvent {
     pub swap_id: u64,
+    pub seller_amount: i128,
+    pub fee_amount: i128,
 }
 
 /// Payload published when protocol fee is deducted on swap completion.
@@ -175,6 +177,7 @@ pub struct ProtocolConfig {
     pub protocol_fee_bps: u32, // 0-10000 (0.00% - 100.00%)
     pub treasury: Address,
     pub dispute_window_seconds: u64,
+    pub dispute_resolution_timeout_seconds: u64,
 }
 
 // ── #253: Swap History ────────────────────────────────────────────────────────
@@ -442,7 +445,106 @@ impl AtomicSwap {
 
         env.events().publish(
             (soroban_sdk::symbol_short!("key_rev"),),
-            KeyRevealedEvent { swap_id },
+            KeyRevealedEvent { swap_id, seller_amount, fee_amount },
+        );
+    }
+
+    /// Buyer raises a dispute on an Accepted swap within the dispute window.
+    pub fn raise_dispute(env: Env, swap_id: u64) {
+        let mut swap = require_swap_exists(&env, swap_id);
+        swap.buyer.require_auth();
+        require_swap_status(&env, &swap, SwapStatus::Accepted, ContractError::SwapNotAccepted);
+
+        let config = Self::protocol_config(&env);
+        let elapsed = env.ledger().timestamp().saturating_sub(swap.accept_timestamp);
+        if elapsed >= config.dispute_window_seconds {
+            env.panic_with_error(Error::from_contract_error(
+                ContractError::DisputeWindowExpired as u32,
+            ));
+        }
+
+        swap.status = SwapStatus::Disputed;
+        swap.dispute_timestamp = env.ledger().timestamp();
+        swap::save_swap(&env, swap_id, &swap);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("disputed"),),
+            DisputeRaisedEvent { swap_id },
+        );
+    }
+
+    /// Admin resolves a disputed swap. refunded=true refunds buyer; false completes to seller.
+    pub fn resolve_dispute(env: Env, swap_id: u64, caller: Address, refunded: bool) {
+        caller.require_auth();
+        require_admin(&env, &caller);
+
+        let mut swap = require_swap_exists(&env, swap_id);
+        require_swap_status(&env, &swap, SwapStatus::Disputed, ContractError::SwapNotDisputed);
+
+        let token_client = token::Client::new(&env, &swap.token);
+        if refunded {
+            swap.status = SwapStatus::Cancelled;
+            swap::save_swap(&env, swap_id, &swap);
+            env.storage().persistent().remove(&DataKey::ActiveSwap(swap.ip_id));
+            token_client.transfer(&env.current_contract_address(), &swap.buyer, &swap.price);
+            env.storage().persistent().set(
+                &DataKey::CancelReason(swap_id),
+                &Bytes::from_slice(&env, b"dispute_refund"),
+            );
+        } else {
+            swap.status = SwapStatus::Completed;
+            swap::save_swap(&env, swap_id, &swap);
+            env.storage().persistent().remove(&DataKey::ActiveSwap(swap.ip_id));
+            let config = Self::protocol_config(&env);
+            let fee_amount = if config.protocol_fee_bps > 0 {
+                (swap.price * config.protocol_fee_bps as i128) / 10000
+            } else {
+                0
+            };
+            let seller_amount = swap.price - fee_amount;
+            if fee_amount > 0 {
+                token_client.transfer(&env.current_contract_address(), &config.treasury, &fee_amount);
+            }
+            token_client.transfer(&env.current_contract_address(), &swap.seller, &seller_amount);
+        }
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("disp_res"),),
+            DisputeResolvedEvent { swap_id, refunded },
+        );
+    }
+
+    /// Anyone can call after dispute_resolution_timeout_seconds to auto-refund the buyer.
+    pub fn auto_resolve_dispute(env: Env, swap_id: u64) {
+        let mut swap = require_swap_exists(&env, swap_id);
+        require_swap_status(&env, &swap, SwapStatus::Disputed, ContractError::SwapNotDisputed);
+
+        let config = Self::protocol_config(&env);
+        let elapsed = env.ledger().timestamp().saturating_sub(swap.dispute_timestamp);
+        if elapsed < config.dispute_resolution_timeout_seconds {
+            env.panic_with_error(Error::from_contract_error(
+                ContractError::DisputeResolutionTimeout as u32,
+            ));
+        }
+
+        swap.status = SwapStatus::Cancelled;
+        swap::save_swap(&env, swap_id, &swap);
+        env.storage().persistent().remove(&DataKey::ActiveSwap(swap.ip_id));
+
+        token::Client::new(&env, &swap.token).transfer(
+            &env.current_contract_address(),
+            &swap.buyer,
+            &swap.price,
+        );
+
+        env.storage().persistent().set(
+            &DataKey::CancelReason(swap_id),
+            &Bytes::from_slice(&env, b"dispute_timeout"),
+        );
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("disp_res"),),
+            DisputeResolvedEvent { swap_id, refunded: true },
         );
     }
 
@@ -532,6 +634,7 @@ impl AtomicSwap {
         protocol_fee_bps: u32,
         treasury: Address,
         dispute_window_seconds: u64,
+        dispute_resolution_timeout_seconds: u64,
     ) {
         if protocol_fee_bps > 10_000 {
             env.panic_with_error(Error::from_contract_error(
@@ -564,6 +667,7 @@ impl AtomicSwap {
                 protocol_fee_bps,
                 treasury,
                 dispute_window_seconds,
+                dispute_resolution_timeout_seconds,
             },
         );
     }
@@ -585,6 +689,7 @@ impl AtomicSwap {
                 protocol_fee_bps: 0,
                 treasury: env.current_contract_address(),
                 dispute_window_seconds: 86400,
+                dispute_resolution_timeout_seconds: 2_592_000, // 30 days
             })
     }
 
@@ -641,6 +746,11 @@ impl AtomicSwap {
     /// Read a swap record. Returns `None` if the swap_id does not exist.
     pub fn get_swap(env: Env, swap_id: u64) -> Option<SwapRecord> {
         env.storage().persistent().get(&DataKey::Swap(swap_id))
+    }
+
+    /// Returns the cancellation reason for a swap, or `None` if not cancelled / reason not set.
+    pub fn get_cancellation_reason(env: Env, swap_id: u64) -> Option<Bytes> {
+        env.storage().persistent().get(&DataKey::CancelReason(swap_id))
     }
 
     /// Returns the total number of swaps created.

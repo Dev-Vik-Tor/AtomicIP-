@@ -97,6 +97,8 @@ pub struct SwapCancelledEvent {
 #[derive(Clone, Debug, PartialEq)]
 pub struct KeyRevealedEvent {
     pub swap_id: u64,
+    pub seller_amount: i128,
+    pub fee_amount: i128,
 }
 
 /// Payload published when protocol fee is deducted on swap completion.
@@ -127,6 +129,7 @@ pub struct ProtocolConfig {
     pub protocol_fee_bps: u32,  // 0-10000 (0.00% - 100.00%)
     pub treasury: Address,
     pub dispute_window_seconds: u64,
+    pub dispute_resolution_timeout_seconds: u64,
 }
 
 // ── #253: Swap History ────────────────────────────────────────────────────────
