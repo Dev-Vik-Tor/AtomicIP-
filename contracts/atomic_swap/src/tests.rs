@@ -54,7 +54,7 @@ mod tests {
         let contract_id = setup_swap(&env, &registry_id);
         let client = AtomicSwapClient::new(&env, &contract_id);
 
-        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer, &0_u32);
 
         let ttl = env.storage().persistent().get_ttl(&DataKey::Swap(swap_id));
         assert!(ttl > 0, "TTL should be set after swap initiation");
@@ -78,7 +78,7 @@ mod tests {
         let contract_id = setup_swap(&env, &registry_id);
         let client = AtomicSwapClient::new(&env, &contract_id);
 
-        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer, &0_u32);
         client.accept_swap(&swap_id);
 
         let ttl = env.storage().persistent().get_ttl(&DataKey::Swap(swap_id));
@@ -103,7 +103,7 @@ mod tests {
         let contract_id = setup_swap(&env, &registry_id);
         let client = AtomicSwapClient::new(&env, &contract_id);
 
-        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer, &0_u32);
         client.accept_swap(&swap_id);
         client.reveal_key(&swap_id, &seller, &secret, &blinding);
 
@@ -129,7 +129,7 @@ mod tests {
         let contract_id = setup_swap(&env, &registry_id);
         let client = AtomicSwapClient::new(&env, &contract_id);
 
-        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer, &0_u32);
         client.cancel_swap(&swap_id, &seller);
 
         let ttl = env.storage().persistent().get_ttl(&DataKey::Swap(swap_id));
@@ -154,7 +154,7 @@ mod tests {
         let contract_id = setup_swap(&env, &registry_id);
         let client = AtomicSwapClient::new(&env, &contract_id);
 
-        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer);
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &500_i128, &buyer, &0_u32);
         let ttl_init = env.storage().persistent().get_ttl(&DataKey::Swap(swap_id));
 
         client.accept_swap(&swap_id);

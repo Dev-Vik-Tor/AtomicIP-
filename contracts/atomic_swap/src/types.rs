@@ -28,6 +28,10 @@ pub enum DataKey {
     IpSwaps(u64),
     /// Whether the contract is paused (blocks initiate_swap and accept_swap).
     Paused,
+    /// #253: Maps swap_id → Vec<SwapHistoryEntry> audit trail.
+    SwapHistory(u64),
+    /// #254: Maps swap_id → Vec<Address> of collected approvals.
+    SwapApprovals(u64),
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -55,6 +59,8 @@ pub struct SwapRecord {
     /// if reveal_key has not been called. Set at initiation time.
     pub expiry: u64,
     pub accept_timestamp: u64,
+    /// #254: Number of approvals required before accept_swap is allowed.
+    pub required_approvals: u32,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -121,4 +127,34 @@ pub struct ProtocolConfig {
     pub protocol_fee_bps: u32,  // 0-10000 (0.00% - 100.00%)
     pub treasury: Address,
     pub dispute_window_seconds: u64,
+}
+
+// ── #253: Swap History ────────────────────────────────────────────────────────
+
+/// A single state-transition entry in the swap audit trail.
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapHistoryEntry {
+    pub status: SwapStatus,
+    pub timestamp: u64,
+}
+
+// ── #252: Expiry Extension Event ──────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapExpiryExtendedEvent {
+    pub swap_id: u64,
+    pub old_expiry: u64,
+    pub new_expiry: u64,
+}
+
+// ── #254: Swap Approved Event ─────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapApprovedEvent {
+    pub swap_id: u64,
+    pub approver: Address,
+    pub approvals_count: u32,
 }
