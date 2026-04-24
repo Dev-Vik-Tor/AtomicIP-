@@ -55,6 +55,8 @@ pub struct SwapRecord {
     /// if reveal_key has not been called. Set at initiation time.
     pub expiry: u64,
     pub accept_timestamp: u64,
+    /// Ledger timestamp when the dispute was raised. 0 if not disputed.
+    pub dispute_timestamp: u64,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -123,4 +125,5 @@ pub struct ProtocolConfig {
     pub protocol_fee_bps: u32,  // 0-10000 (0.00% - 100.00%)
     pub treasury: Address,
     pub dispute_window_seconds: u64,
+    pub dispute_resolution_timeout_seconds: u64,
 }

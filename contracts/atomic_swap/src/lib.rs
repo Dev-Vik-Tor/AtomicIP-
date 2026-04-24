@@ -40,6 +40,7 @@ pub enum ContractError {
     AlreadyInitialized = 22,
     Unauthorized = 23,
     NotInitialized = 24,
+    DisputeResolutionTimeout = 25,
 }
 
 // ── TTL ───────────────────────────────────────────────────────────────────────
@@ -95,6 +96,8 @@ pub struct SwapRecord {
     /// if reveal_key has not been called. Set at initiation time.
     pub expiry: u64,
     pub accept_timestamp: u64,
+    /// Ledger timestamp when the dispute was raised. 0 if not disputed.
+    pub dispute_timestamp: u64,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -163,6 +166,7 @@ pub struct ProtocolConfig {
     pub protocol_fee_bps: u32, // 0-10000 (0.00% - 100.00%)
     pub treasury: Address,
     pub dispute_window_seconds: u64,
+    pub dispute_resolution_timeout_seconds: u64,
 }
 
 // ── Contract ──────────────────────────────────────────────────────────────────
@@ -226,6 +230,7 @@ impl AtomicSwap {
             status: SwapStatus::Pending,
             expiry: env.ledger().timestamp() + 604800u64,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
 
         env.storage().persistent().set(&DataKey::Swap(id), &swap);
@@ -380,6 +385,96 @@ impl AtomicSwap {
         );
     }
 
+    /// Buyer raises a dispute on an Accepted swap within the dispute window.
+    pub fn raise_dispute(env: Env, swap_id: u64) {
+        let mut swap = require_swap_exists(&env, swap_id);
+        swap.buyer.require_auth();
+        require_swap_status(&env, &swap, SwapStatus::Accepted, ContractError::SwapNotAccepted);
+
+        let config = Self::protocol_config(&env);
+        let elapsed = env.ledger().timestamp().saturating_sub(swap.accept_timestamp);
+        if elapsed >= config.dispute_window_seconds {
+            env.panic_with_error(Error::from_contract_error(
+                ContractError::DisputeWindowExpired as u32,
+            ));
+        }
+
+        swap.status = SwapStatus::Disputed;
+        swap.dispute_timestamp = env.ledger().timestamp();
+        swap::save_swap(&env, swap_id, &swap);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("disputed"),),
+            DisputeRaisedEvent { swap_id },
+        );
+    }
+
+    /// Admin resolves a disputed swap. refunded=true refunds buyer; false completes to seller.
+    pub fn resolve_dispute(env: Env, swap_id: u64, caller: Address, refunded: bool) {
+        caller.require_auth();
+        require_admin(&env, &caller);
+
+        let mut swap = require_swap_exists(&env, swap_id);
+        require_swap_status(&env, &swap, SwapStatus::Disputed, ContractError::SwapNotDisputed);
+
+        let token_client = token::Client::new(&env, &swap.token);
+        if refunded {
+            swap.status = SwapStatus::Cancelled;
+            swap::save_swap(&env, swap_id, &swap);
+            env.storage().persistent().remove(&DataKey::ActiveSwap(swap.ip_id));
+            token_client.transfer(&env.current_contract_address(), &swap.buyer, &swap.price);
+        } else {
+            swap.status = SwapStatus::Completed;
+            swap::save_swap(&env, swap_id, &swap);
+            env.storage().persistent().remove(&DataKey::ActiveSwap(swap.ip_id));
+            let config = Self::protocol_config(&env);
+            let fee_amount = if config.protocol_fee_bps > 0 {
+                (swap.price * config.protocol_fee_bps as i128) / 10000
+            } else {
+                0
+            };
+            let seller_amount = swap.price - fee_amount;
+            if fee_amount > 0 {
+                token_client.transfer(&env.current_contract_address(), &config.treasury, &fee_amount);
+            }
+            token_client.transfer(&env.current_contract_address(), &swap.seller, &seller_amount);
+        }
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("disp_res"),),
+            DisputeResolvedEvent { swap_id, refunded },
+        );
+    }
+
+    /// Anyone can call after dispute_resolution_timeout_seconds to auto-refund the buyer.
+    pub fn auto_resolve_dispute(env: Env, swap_id: u64) {
+        let mut swap = require_swap_exists(&env, swap_id);
+        require_swap_status(&env, &swap, SwapStatus::Disputed, ContractError::SwapNotDisputed);
+
+        let config = Self::protocol_config(&env);
+        let elapsed = env.ledger().timestamp().saturating_sub(swap.dispute_timestamp);
+        if elapsed < config.dispute_resolution_timeout_seconds {
+            env.panic_with_error(Error::from_contract_error(
+                ContractError::DisputeResolutionTimeout as u32,
+            ));
+        }
+
+        swap.status = SwapStatus::Cancelled;
+        swap::save_swap(&env, swap_id, &swap);
+        env.storage().persistent().remove(&DataKey::ActiveSwap(swap.ip_id));
+
+        token::Client::new(&env, &swap.token).transfer(
+            &env.current_contract_address(),
+            &swap.buyer,
+            &swap.price,
+        );
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("disp_res"),),
+            DisputeResolvedEvent { swap_id, refunded: true },
+        );
+    }
+
     /// Cancel a pending swap. Only the seller or buyer may cancel.
     pub fn cancel_swap(env: Env, swap_id: u64, canceller: Address) {
         let mut swap = require_swap_exists(&env, swap_id);
@@ -460,6 +555,7 @@ impl AtomicSwap {
         protocol_fee_bps: u32,
         treasury: Address,
         dispute_window_seconds: u64,
+        dispute_resolution_timeout_seconds: u64,
     ) {
         if protocol_fee_bps > 10_000 {
             env.panic_with_error(Error::from_contract_error(
@@ -492,6 +588,7 @@ impl AtomicSwap {
                 protocol_fee_bps,
                 treasury,
                 dispute_window_seconds,
+                dispute_resolution_timeout_seconds,
             },
         );
     }
@@ -513,6 +610,7 @@ impl AtomicSwap {
                 protocol_fee_bps: 0,
                 treasury: env.current_contract_address(),
                 dispute_window_seconds: 86400,
+                dispute_resolution_timeout_seconds: 2_592_000, // 30 days
             })
     }
 

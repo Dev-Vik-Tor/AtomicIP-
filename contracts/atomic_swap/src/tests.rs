@@ -3,7 +3,7 @@
 mod tests {
     use ip_registry::{IpRegistry, IpRegistryClient};
     use soroban_sdk::{
-        testutils::{storage::Persistent, Address as _},
+        testutils::{storage::Persistent, Address as _, Ledger},
         token::StellarAssetClient,
         Address, BytesN, Env,
     };
@@ -182,7 +182,7 @@ mod tests {
         let client = AtomicSwapClient::new(&env, &contract_id);
         let treasury = Address::generate(&env);
 
-        client.admin_set_protocol_config(&250u32, &treasury, &3_600u64);
+        client.admin_set_protocol_config(&250u32, &treasury, &3_600u64, &2_592_000u64);
 
         let cached = env
             .storage()
@@ -206,8 +206,8 @@ mod tests {
         let treasury_a = Address::generate(&env);
         let treasury_b = Address::generate(&env);
 
-        client.admin_set_protocol_config(&100u32, &treasury_a, &900u64);
-        client.admin_set_protocol_config(&500u32, &treasury_b, &7_200u64);
+        client.admin_set_protocol_config(&100u32, &treasury_a, &900u64, &2_592_000u64);
+        client.admin_set_protocol_config(&500u32, &treasury_b, &7_200u64, &2_592_000u64);
 
         let cached = env
             .storage()
@@ -244,7 +244,7 @@ mod tests {
         let client = AtomicSwapClient::new(&env, &contract_id);
 
         // 250 bps = 2.5% fee
-        client.admin_set_protocol_config(&250u32, &treasury, &86400u64);
+        client.admin_set_protocol_config(&250u32, &treasury, &86400u64, &2_592_000u64);
 
         let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &price, &buyer);
         client.accept_swap(&swap_id);
@@ -264,5 +264,70 @@ mod tests {
         assert_eq!(event.swap_id, swap_id);
         assert_eq!(event.fee_amount, expected_fee);
         assert_eq!(event.seller_amount, expected_seller);
+    }
+
+    #[test]
+    fn test_auto_resolve_dispute_refunds_buyer_after_timeout() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let (registry_id, ip_id, _, _) = setup_registry(&env, &seller);
+        let price = 1000_i128;
+        let token_id = setup_token(&env, &admin, &buyer, price);
+
+        let contract_id = setup_swap(&env, &registry_id);
+        let client = AtomicSwapClient::new(&env, &contract_id);
+
+        // 1-second dispute window, 100-second resolution timeout
+        client.admin_set_protocol_config(&0u32, &treasury, &1u64, &100u64);
+
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &price, &buyer);
+        client.accept_swap(&swap_id);
+
+        // Advance time past dispute window so buyer can raise dispute
+        env.ledger().with_mut(|l| l.timestamp = 10);
+        // Wait — dispute window is 1s, accept_timestamp is 0, elapsed = 10 >= 1 → expired
+        // So we need to raise dispute BEFORE the window expires. Reset to within window.
+        env.ledger().with_mut(|l| l.timestamp = 0);
+        client.raise_dispute(&swap_id);
+
+        // Advance past resolution timeout (100s from dispute_timestamp=0)
+        env.ledger().with_mut(|l| l.timestamp = 101);
+        client.auto_resolve_dispute(&swap_id);
+
+        assert_eq!(client.get_swap(&swap_id).unwrap().status, SwapStatus::Cancelled);
+    }
+
+    #[test]
+    #[should_panic(expected = "Error(Contract, #25)")]
+    fn test_auto_resolve_dispute_rejected_before_timeout() {
+        let env = Env::default();
+        env.mock_all_auths();
+
+        let seller = Address::generate(&env);
+        let buyer = Address::generate(&env);
+        let admin = Address::generate(&env);
+        let treasury = Address::generate(&env);
+        let (registry_id, ip_id, _, _) = setup_registry(&env, &seller);
+        let price = 500_i128;
+        let token_id = setup_token(&env, &admin, &buyer, price);
+
+        let contract_id = setup_swap(&env, &registry_id);
+        let client = AtomicSwapClient::new(&env, &contract_id);
+
+        // 1-second dispute window, 1000-second resolution timeout
+        client.admin_set_protocol_config(&0u32, &treasury, &1u64, &1000u64);
+
+        let swap_id = client.initiate_swap(&token_id, &ip_id, &seller, &price, &buyer);
+        client.accept_swap(&swap_id);
+        client.raise_dispute(&swap_id);
+
+        // Only 50s elapsed — timeout not reached
+        env.ledger().with_mut(|l| l.timestamp = 50);
+        client.auto_resolve_dispute(&swap_id); // must panic DisputeResolutionTimeout=25
     }
 }

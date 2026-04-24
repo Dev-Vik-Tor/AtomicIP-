@@ -267,6 +267,7 @@ mod tests {
             status: SwapStatus::Pending,
             expiry: 0,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         // Should not panic
         require_swap_status(
@@ -290,6 +291,7 @@ mod tests {
             status: SwapStatus::Accepted,
             expiry: 0,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         require_swap_status(
             &env,
@@ -312,6 +314,7 @@ mod tests {
             status: SwapStatus::Pending,
             expiry: 0,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         // Should not panic
         require_seller(&env, &seller, &swap);
@@ -332,6 +335,7 @@ mod tests {
             status: SwapStatus::Pending,
             expiry: 0,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         require_seller(&env, &not_seller, &swap);
     }
@@ -349,6 +353,7 @@ mod tests {
             status: SwapStatus::Pending,
             expiry: 0,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         // Should not panic
         require_buyer(&env, &buyer, &swap);
@@ -369,6 +374,7 @@ mod tests {
             status: SwapStatus::Pending,
             expiry: 0,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         require_buyer(&env, &not_buyer, &swap);
     }
@@ -386,6 +392,7 @@ mod tests {
             status: SwapStatus::Pending,
             expiry: 0,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         // Should not panic
         require_seller_or_buyer(&env, &seller, &swap);
@@ -404,6 +411,7 @@ mod tests {
             status: SwapStatus::Pending,
             expiry: 0,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         // Should not panic
         require_seller_or_buyer(&env, &buyer, &swap);
@@ -425,6 +433,7 @@ mod tests {
             status: SwapStatus::Pending,
             expiry: 0,
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         require_seller_or_buyer(&env, &neither, &swap);
     }
@@ -441,6 +450,7 @@ mod tests {
             status: SwapStatus::Accepted,
             expiry: 0, // Expired (timestamp is > 0)
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         // Should not panic
         require_swap_expired(&env, &swap);
@@ -459,6 +469,7 @@ mod tests {
             status: SwapStatus::Accepted,
             expiry: u64::MAX, // Far in the future
             accept_timestamp: 0,
+            dispute_timestamp: 0,
         };
         require_swap_expired(&env, &swap);
     }
