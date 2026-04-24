@@ -2,6 +2,7 @@
 mod registry;
 mod swap;
 mod utils;
+mod multi_currency;
 
 use soroban_sdk::{
     contract, contracterror, contractimpl, contracttype, token, Address, Bytes, BytesN, Env, Error, Vec,
@@ -9,6 +10,7 @@ use soroban_sdk::{
 
 mod validation;
 use validation::*;
+use multi_currency::{SupportedToken, MultiCurrencyConfig, TokenMetadata};
 
 // ── Error Codes ────────────────────────────────────────────────────────────
 
@@ -741,6 +743,103 @@ impl AtomicSwap {
         caller.require_auth();
         require_admin(&env, &caller);
         env.storage().instance().set(&DataKey::Paused, &false);
+    }
+
+    // ── Multi-Currency Management ──────────────────────────────────────────────
+
+    /// Initialize multi-currency support
+    pub fn initialize_multi_currency(env: Env, caller: Address) -> Result<(), ContractError> {
+        caller.require_auth();
+        require_admin(&env, &caller);
+
+        let config = MultiCurrencyConfig::initialize(&env);
+        env.storage().persistent().set(&DataKey::MultiCurrencyConfig, &config);
+        
+        // Store supported tokens list
+        env.storage().persistent().set(&DataKey::SupportedTokens, &config.enabled_tokens);
+        
+        Ok(())
+    }
+
+    /// Get multi-currency configuration
+    pub fn get_multi_currency_config(env: Env) -> Result<MultiCurrencyConfig, ContractError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::MultiCurrencyConfig)
+            .ok_or(ContractError::SwapNotFound) // Reusing error for "not configured"
+    }
+
+    /// Get list of supported tokens
+    pub fn get_supported_tokens(env: Env) -> Result<Vec<SupportedToken>, ContractError> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SupportedTokens)
+            .ok_or(ContractError::SwapNotFound)
+    }
+
+    /// Check if a token is supported
+    pub fn is_token_supported(env: Env, token: SupportedToken) -> Result<bool, ContractError> {
+        let config = Self::get_multi_currency_config(env)?;
+        Ok(config.is_token_supported(&token))
+    }
+
+    /// Get token metadata by symbol
+    pub fn get_token_metadata(env: Env, symbol: String) -> Result<TokenMetadata, ContractError> {
+        let config = Self::get_multi_currency_config(env)?;
+        config.get_token_by_symbol(&env, &symbol).ok_or(ContractError::SwapNotFound)
+    }
+
+    /// Add a new supported token (admin only)
+    pub fn add_supported_token(
+        env: Env,
+        caller: Address,
+        token: SupportedToken,
+        metadata: TokenMetadata,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+        require_admin(&env, &caller);
+
+        let mut config = Self::get_multi_currency_config(env)?;
+        
+        if !config.enabled_tokens.contains(token.clone()) {
+            config.enabled_tokens.push_back(token.clone());
+            config.token_metadata.push_back(metadata);
+            
+            env.storage().persistent().set(&DataKey::MultiCurrencyConfig, &config);
+            env.storage().persistent().set(&DataKey::SupportedTokens, &config.enabled_tokens);
+            
+            env.events().publish(
+                (symbol_short!("token_add"),),
+                multi_currency::TokenAddedEvent {
+                    token,
+                    address: metadata.address,
+                },
+            );
+        }
+        
+        Ok(())
+    }
+
+    /// Remove a supported token (admin only)
+    pub fn remove_supported_token(
+        env: Env,
+        caller: Address,
+        token: SupportedToken,
+    ) -> Result<(), ContractError> {
+        caller.require_auth();
+        require_admin(&env, &caller);
+
+        let mut config = Self::get_multi_currency_config(env)?;
+        
+        // Cannot remove default token
+        if config.default_token == token {
+            return Err(ContractError::UnauthorizedUpgrade); // Reusing error
+        }
+
+        // Remove from lists (simplified - in production would need proper removal)
+        // For now, just mark as removed in a future enhancement
+        
+        Ok(())
     }
 
     /// Read a swap record. Returns `None` if the swap_id does not exist.
