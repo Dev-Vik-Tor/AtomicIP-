@@ -39,6 +39,9 @@ jobs:
       - name: Test
         run: cargo test --workspace
 
+      - name: Regression tests
+        run: cargo test --workspace regression_tests
+
       - name: Code coverage
         run: |
           cargo install cargo-tarpaulin

@@ -917,3 +917,6 @@ mod tests;
 
 #[cfg(test)]
 mod prop_tests;
+
+#[cfg(test)]
+mod regression_tests;
