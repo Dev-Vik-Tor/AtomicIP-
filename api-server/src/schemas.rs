@@ -107,3 +107,17 @@ pub struct CancelExpiredSwapRequest {
 pub struct ErrorResponse {
     pub error: String,
 }
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct RegisterWebhookRequest {
+    pub url: String,
+    pub events: Vec<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize, ToSchema)]
+pub struct WebhookResponse {
+    pub id: String,
+    pub url: String,
+    pub events: Vec<String>,
+    pub created_at: u64,
+}

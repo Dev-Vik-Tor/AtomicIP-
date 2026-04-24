@@ -40,7 +40,14 @@ pub enum ContractError {
     AlreadyInitialized = 22,
     Unauthorized = 23,
     NotInitialized = 24,
-    DisputeResolutionTimeout = 25,
+    /// #251: Buyer tried to cancel a pending swap that hasn't expired yet.
+    PendingSwapNotExpired = 25,
+    /// #252: New expiry must be strictly greater than current expiry.
+    NewExpiryNotGreater = 26,
+    /// #254: accept_swap called before all required approvals are collected.
+    InsufficientApprovals = 27,
+    /// #254: Approver has already approved this swap.
+    AlreadyApproved = 28,
 }
 
 // ── TTL ───────────────────────────────────────────────────────────────────────
@@ -69,8 +76,10 @@ pub enum DataKey {
     ProtocolConfig,
     Paused,
     IpSwaps(u64),
-    /// Maps swap_id → cancellation reason bytes. Set only when a swap is cancelled.
-    CancelReason(u64),
+    /// #253: Maps swap_id → Vec<SwapHistoryEntry> audit trail.
+    SwapHistory(u64),
+    /// #254: Maps swap_id → Vec<Address> of collected approvals.
+    SwapApprovals(u64),
 }
 
 // ── Types ─────────────────────────────────────────────────────────────────────
@@ -98,8 +107,8 @@ pub struct SwapRecord {
     /// if reveal_key has not been called. Set at initiation time.
     pub expiry: u64,
     pub accept_timestamp: u64,
-    /// Ledger timestamp when the dispute was raised. 0 if not disputed.
-    pub dispute_timestamp: u64,
+    /// #254: Number of approvals required before accept_swap is allowed.
+    pub required_approvals: u32,
 }
 
 // ── Events ────────────────────────────────────────────────────────────────────
@@ -171,6 +180,35 @@ pub struct ProtocolConfig {
     pub dispute_resolution_timeout_seconds: u64,
 }
 
+// ── #253: Swap History ────────────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapHistoryEntry {
+    pub status: SwapStatus,
+    pub timestamp: u64,
+}
+
+// ── #252: Expiry Extension Event ──────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapExpiryExtendedEvent {
+    pub swap_id: u64,
+    pub old_expiry: u64,
+    pub new_expiry: u64,
+}
+
+// ── #254: Swap Approved Event ─────────────────────────────────────────────────
+
+#[contracttype]
+#[derive(Clone, Debug, PartialEq)]
+pub struct SwapApprovedEvent {
+    pub swap_id: u64,
+    pub approver: Address,
+    pub approvals_count: u32,
+}
+
 // ── Contract ──────────────────────────────────────────────────────────────────
 
 #[contract]
@@ -199,6 +237,7 @@ impl AtomicSwap {
         seller: Address,
         price: i128,
         buyer: Address,
+        required_approvals: u32,
     ) -> u64 {
         // Guard: reject new swaps when the contract is paused.
         require_not_paused(&env);
@@ -232,7 +271,7 @@ impl AtomicSwap {
             status: SwapStatus::Pending,
             expiry: env.ledger().timestamp() + 604800u64,
             accept_timestamp: 0,
-            dispute_timestamp: 0,
+            required_approvals,
         };
 
         env.storage().persistent().set(&DataKey::Swap(id), &swap);
@@ -263,6 +302,9 @@ impl AtomicSwap {
         env.storage()
             .persistent()
             .extend_ttl(&DataKey::IpSwaps(ip_id), 50000, 50000);
+
+        // #253: Log initial history entry
+        Self::append_history(&env, id, SwapStatus::Pending);
 
         env.storage().instance().set(&DataKey::NextId, &(id + 1));
 
@@ -295,6 +337,20 @@ impl AtomicSwap {
             ContractError::SwapNotPending,
         );
 
+        // #254: Ensure all required approvals have been collected.
+        if swap.required_approvals > 0 {
+            let approvals: Vec<Address> = env
+                .storage()
+                .persistent()
+                .get(&DataKey::SwapApprovals(swap_id))
+                .unwrap_or(Vec::new(&env));
+            if (approvals.len() as u32) < swap.required_approvals {
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::InsufficientApprovals as u32,
+                ));
+            }
+        }
+
         // Transfer payment from buyer into contract escrow.
         token::Client::new(&env, &swap.token).transfer(
             &swap.buyer,
@@ -306,6 +362,9 @@ impl AtomicSwap {
         swap.status = SwapStatus::Accepted;
 
         swap::save_swap(&env, swap_id, &swap);
+
+        // #253: Log history entry
+        Self::append_history(&env, swap_id, SwapStatus::Accepted);
 
         env.events().publish(
             (soroban_sdk::symbol_short!("swap_acpt"),),
@@ -348,6 +407,9 @@ impl AtomicSwap {
         env.storage()
             .persistent()
             .remove(&DataKey::ActiveSwap(swap.ip_id));
+
+        // #253: Log history entry
+        Self::append_history(&env, swap_id, SwapStatus::Completed);
 
         // Protocol fee deduction
         let token_client = token::Client::new(&env, &swap.token);
@@ -506,10 +568,8 @@ impl AtomicSwap {
             .persistent()
             .remove(&DataKey::ActiveSwap(swap.ip_id));
 
-        env.storage().persistent().set(
-            &DataKey::CancelReason(swap_id),
-            &Bytes::from_slice(&env, b"manual_cancel"),
-        );
+        // #253: Log history entry
+        Self::append_history(&env, swap_id, SwapStatus::Cancelled);
 
         env.events().publish(
             (soroban_sdk::symbol_short!("swap_cncl"),),
@@ -543,10 +603,8 @@ impl AtomicSwap {
             &swap.price,
         );
 
-        env.storage().persistent().set(
-            &DataKey::CancelReason(swap_id),
-            &Bytes::from_slice(&env, b"expired"),
-        );
+        // #253: Log history entry
+        Self::append_history(&env, swap_id, SwapStatus::Cancelled);
 
         env.events().publish(
             (soroban_sdk::symbol_short!("s_cancel"),),
@@ -698,6 +756,157 @@ impl AtomicSwap {
     /// Returns the total number of swaps created.
     pub fn swap_count(env: Env) -> u64 {
         env.storage().instance().get(&DataKey::NextId).unwrap_or(0)
+    }
+
+    // ── #251: Buyer cancel pending swap on timeout ────────────────────────────
+
+    /// Buyer cancels a Pending swap after its expiry. No funds are escrowed at
+    /// this stage so no refund transfer is needed.
+    pub fn cancel_pending_swap(env: Env, swap_id: u64, caller: Address) {
+        let mut swap = require_swap_exists(&env, swap_id);
+
+        require_buyer(&env, &caller, &swap);
+        caller.require_auth();
+        require_swap_status(
+            &env,
+            &swap,
+            SwapStatus::Pending,
+            ContractError::SwapNotPending,
+        );
+
+        if env.ledger().timestamp() < swap.expiry {
+            env.panic_with_error(Error::from_contract_error(
+                ContractError::PendingSwapNotExpired as u32,
+            ));
+        }
+
+        swap.status = SwapStatus::Cancelled;
+        swap::save_swap(&env, swap_id, &swap);
+        env.storage()
+            .persistent()
+            .remove(&DataKey::ActiveSwap(swap.ip_id));
+
+        Self::append_history(&env, swap_id, SwapStatus::Cancelled);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("s_cancel"),),
+            SwapCancelledEvent {
+                swap_id,
+                canceller: caller,
+            },
+        );
+    }
+
+    // ── #252: Seller extend swap expiry ──────────────────────────────────────
+
+    /// Seller extends the expiry of a Pending swap to a later timestamp.
+    pub fn extend_swap_expiry(env: Env, swap_id: u64, new_expiry: u64) {
+        let mut swap = require_swap_exists(&env, swap_id);
+
+        swap.seller.require_auth();
+        require_swap_status(
+            &env,
+            &swap,
+            SwapStatus::Pending,
+            ContractError::SwapNotPending,
+        );
+
+        if new_expiry <= swap.expiry {
+            env.panic_with_error(Error::from_contract_error(
+                ContractError::NewExpiryNotGreater as u32,
+            ));
+        }
+
+        let old_expiry = swap.expiry;
+        swap.expiry = new_expiry;
+        swap::save_swap(&env, swap_id, &swap);
+
+        env.events().publish(
+            (soroban_sdk::symbol_short!("exp_ext"),),
+            SwapExpiryExtendedEvent {
+                swap_id,
+                old_expiry,
+                new_expiry,
+            },
+        );
+    }
+
+    // ── #253: Swap history / audit trail ─────────────────────────────────────
+
+    /// Returns the full state-transition history for a swap.
+    pub fn get_swap_history(env: Env, swap_id: u64) -> Vec<SwapHistoryEntry> {
+        env.storage()
+            .persistent()
+            .get(&DataKey::SwapHistory(swap_id))
+            .unwrap_or(Vec::new(&env))
+    }
+
+    fn append_history(env: &Env, swap_id: u64, status: SwapStatus) {
+        let mut history: Vec<SwapHistoryEntry> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SwapHistory(swap_id))
+            .unwrap_or(Vec::new(env));
+        history.push_back(SwapHistoryEntry {
+            status,
+            timestamp: env.ledger().timestamp(),
+        });
+        env.storage()
+            .persistent()
+            .set(&DataKey::SwapHistory(swap_id), &history);
+        env.storage()
+            .persistent()
+            .extend_ttl(&DataKey::SwapHistory(swap_id), LEDGER_BUMP, LEDGER_BUMP);
+    }
+
+    // ── #254: Multi-sig approval ──────────────────────────────────────────────
+
+    /// Any authorized approver submits their approval for a Pending swap.
+    pub fn approve_swap(env: Env, swap_id: u64, approver: Address) {
+        approver.require_auth();
+
+        let swap = require_swap_exists(&env, swap_id);
+        require_swap_status(
+            &env,
+            &swap,
+            SwapStatus::Pending,
+            ContractError::SwapNotPending,
+        );
+
+        let mut approvals: Vec<Address> = env
+            .storage()
+            .persistent()
+            .get(&DataKey::SwapApprovals(swap_id))
+            .unwrap_or(Vec::new(&env));
+
+        // Prevent duplicate approvals
+        for i in 0..approvals.len() {
+            if approvals.get(i).unwrap() == approver {
+                env.panic_with_error(Error::from_contract_error(
+                    ContractError::AlreadyApproved as u32,
+                ));
+            }
+        }
+
+        approvals.push_back(approver.clone());
+        env.storage()
+            .persistent()
+            .set(&DataKey::SwapApprovals(swap_id), &approvals);
+        env.storage().persistent().extend_ttl(
+            &DataKey::SwapApprovals(swap_id),
+            LEDGER_BUMP,
+            LEDGER_BUMP,
+        );
+
+        let approvals_count = approvals.len() as u32;
+        env.events().publish(
+            (soroban_sdk::symbol_short!("approved"),),
+            SwapApprovedEvent {
+                swap_id,
+                approver,
+                approvals_count,
+            },
+        );
     }
 }
 
