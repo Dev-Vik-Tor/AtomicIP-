@@ -65,6 +65,7 @@ pub struct IpRecord {
     pub revoked: bool,
     pub expiry_timestamp: u64,   // 0 = no expiry
     pub metadata: Bytes,         // max 1 KB; empty = no metadata
+    pub priority: u8,            // 0-10 scale, 0 = no priority, 10 = highest
 }
 
 #[contracttype]
