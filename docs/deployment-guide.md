@@ -1,6 +1,6 @@
-# Mainnet Deployment Guide
+# AtomicIP Production Deployment Guide
 
-This guide covers the production deployment of Atomic Patent to the Stellar mainnet. **Extreme care must be taken** to ensure security, irreversibility, and proper configuration.
+**Version:** 2.0.0  
 
 **⚠️ WARNING**: Mainnet deployments are permanent and irreversible. Smart contract bugs can result in total loss of funds. Follow all procedures carefully and conduct thorough audits before deployment.
 
