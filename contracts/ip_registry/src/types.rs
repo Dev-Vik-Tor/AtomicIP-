@@ -41,12 +41,5 @@ pub struct IpRecord {
     pub commitment_hash: BytesN<32>,
     pub timestamp: u64,
     pub revoked: bool,
-    pub visibility: Visibility,
-}
-
-#[contracttype]
-#[derive(Clone, Debug, PartialEq)]
-pub enum Visibility {
-    Private,
-    Public,
+    pub co_owners: soroban_sdk::Vec<Address>,
 }
