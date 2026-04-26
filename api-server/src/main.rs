@@ -14,8 +14,9 @@ mod graphql;
 mod handlers;
 mod metrics;
 mod schemas;
-mod webhook;
+mod tracing_middleware;
 mod versioning;
+mod webhook;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -116,6 +117,7 @@ async fn main() {
         .route("/v1/swap/:swap_id/cancel-expired", post(handlers::cancel_expired_swap))
         .route("/v1/swap/:swap_id", get(handlers::get_swap))
         .with_state(schema)
+        .layer(middleware::from_fn(tracing_middleware::trace_requests))
         .layer(middleware::from_fn(versioning::version_negotiation))
         .layer(middleware::from_fn(metrics::track));
 
@@ -144,6 +146,7 @@ fn build_app() -> Router {
         .route("/v1/swap/:swap_id/cancel-expired", post(handlers::cancel_expired_swap))
         .route("/v1/swap/:swap_id", get(handlers::get_swap))
         .with_state(schema)
+        .layer(middleware::from_fn(tracing_middleware::trace_requests))
         .layer(middleware::from_fn(versioning::version_negotiation))
         .layer(middleware::from_fn(require_json_content_type))
 }
@@ -411,5 +414,45 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
+    }
+
+    // ── #320: API Request Tracing tests ──────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_trace_id_header_present_in_response() {
+        let app = build_app();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/ip/1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(resp.headers().contains_key("X-Trace-ID"));
+        assert!(resp.headers().contains_key("X-Request-ID"));
+    }
+
+    #[tokio::test]
+    async fn test_trace_id_propagation() {
+        let app = build_app();
+        let original_trace_id = "550e8400-e29b-41d4-a716-446655440000";
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/ip/1")
+                    .header("X-Trace-ID", original_trace_id)
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(
+            resp.headers().get("X-Trace-ID").unwrap().to_str().unwrap(),
+            original_trace_id
+        );
     }
 }
