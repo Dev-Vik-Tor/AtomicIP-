@@ -33,6 +33,8 @@ mod tests {
         fn get_partial_disclosure(env: Env, ip_id: u64) -> Option<BytesN<32>>;
         fn validate_upgrade(env: Env, new_wasm_hash: BytesN<32>);
         fn upgrade(env: Env, new_wasm_hash: BytesN<32>);
+        fn set_ip_suggested_price(env: Env, ip_id: u64, price: i128);
+        fn get_ip_suggested_price(env: Env, ip_id: u64) -> Option<i128>;
     }
 
     #[test]
@@ -627,5 +629,76 @@ mod tests {
 
         let zero_hash = BytesN::from_array(&env, &[0u8; 32]);
         client.validate_upgrade(&zero_hash);
+    }
+
+    // ── Suggested Price Tests ─────────────────────────────────────────────────
+
+    #[test]
+    fn test_get_ip_suggested_price_returns_none_when_unset() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = <Address as TestAddress>::generate(&env);
+        let ip_id = client.commit_ip(&owner, &BytesN::from_array(&env, &[1u8; 32]));
+
+        assert_eq!(client.get_ip_suggested_price(&ip_id), None);
+    }
+
+    #[test]
+    fn test_set_and_get_ip_suggested_price() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = <Address as TestAddress>::generate(&env);
+        let ip_id = client.commit_ip(&owner, &BytesN::from_array(&env, &[2u8; 32]));
+
+        client.set_ip_suggested_price(&ip_id, &5000i128);
+        assert_eq!(client.get_ip_suggested_price(&ip_id), Some(5000i128));
+    }
+
+    #[test]
+    fn test_set_ip_suggested_price_zero_clears_price() {
+        let env = Env::default();
+        env.mock_all_auths();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = <Address as TestAddress>::generate(&env);
+        let ip_id = client.commit_ip(&owner, &BytesN::from_array(&env, &[3u8; 32]));
+
+        client.set_ip_suggested_price(&ip_id, &9999i128);
+        assert_eq!(client.get_ip_suggested_price(&ip_id), Some(9999i128));
+
+        client.set_ip_suggested_price(&ip_id, &0i128);
+        assert_eq!(client.get_ip_suggested_price(&ip_id), None);
+    }
+
+    #[test]
+    #[should_panic]
+    fn test_set_ip_suggested_price_requires_owner_auth() {
+        let env = Env::default();
+        let contract_id = env.register(crate::IpRegistry, ());
+        let client = IpRegistryClient::new(&env, &contract_id);
+
+        let owner = <Address as TestAddress>::generate(&env);
+        let attacker = <Address as TestAddress>::generate(&env);
+
+        env.mock_all_auths();
+        let ip_id = client.commit_ip(&owner, &BytesN::from_array(&env, &[4u8; 32]));
+
+        env.mock_auths(&[soroban_sdk::testutils::MockAuth {
+            address: &attacker,
+            invoke: &soroban_sdk::testutils::MockAuthInvoke {
+                contract: &contract_id,
+                fn_name: "set_ip_suggested_price",
+                args: (ip_id, 1000i128).into_val(&env),
+                sub_invokes: &[],
+            },
+        }]);
+        client.set_ip_suggested_price(&ip_id, &1000i128);
     }
 }
