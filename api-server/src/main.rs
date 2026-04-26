@@ -1,6 +1,6 @@
 use axum::{routing::get, routing::post, Router};
 use axum::body::Body;
-use axum::http::StatusCode;
+use axum::http::{StatusCode, HeaderMap};
 use axum::middleware::{self, Next};
 use axum::response::Response;
 use axum::extract::Request;
@@ -10,10 +10,12 @@ use async_graphql_axum::{GraphQLRequest, GraphQLResponse};
 
 mod auth;
 mod cache;
+mod graphql;
 mod handlers;
 mod metrics;
 mod schemas;
 mod webhook;
+mod versioning;
 
 #[derive(OpenApi)]
 #[openapi(
@@ -100,46 +102,49 @@ async fn main() {
     let app = Router::new()
         .merge(SwaggerUi::new("/docs").url("/openapi.json", ApiDoc::openapi()))
         .route("/metrics", get(metrics::metrics_handler))
-        .route("/graphql", post(graphql_handler))
-        .route("/ip/commit", post(handlers::commit_ip))
-        .route("/ip/{ip_id}", get(handlers::get_ip))
-        .route("/ip/transfer", post(handlers::transfer_ip))
-        .route("/ip/verify", post(handlers::verify_commitment))
-        .route("/ip/owner/{owner}", get(handlers::list_ip_by_owner))
-        .route("/swap/initiate", post(handlers::initiate_swap))
-        .route("/swap/batch-initiate", post(handlers::batch_initiate_swap))
-        .route("/swap/{swap_id}/accept", post(handlers::accept_swap))
-        .route("/swap/{swap_id}/reveal", post(handlers::reveal_key))
-        .route("/swap/{swap_id}/cancel", post(handlers::cancel_swap))
-        .route("/swap/{swap_id}/cancel-expired", post(handlers::cancel_expired_swap))
-        .route("/swap/{swap_id}", get(handlers::get_swap))
+        .route("/v1/graphql", post(graphql_handler))
+        .route("/v1/ip/commit", post(handlers::commit_ip))
+        .route("/v1/ip/:ip_id", get(handlers::get_ip))
+        .route("/v1/ip/transfer", post(handlers::transfer_ip))
+        .route("/v1/ip/verify", post(handlers::verify_commitment))
+        .route("/v1/ip/owner/:owner", get(handlers::list_ip_by_owner))
+        .route("/v1/swap/initiate", post(handlers::initiate_swap))
+        .route("/v1/swap/bulk/initiate", post(handlers::batch_initiate_swap))
+        .route("/v1/swap/:swap_id/accept", post(handlers::accept_swap))
+        .route("/v1/swap/:swap_id/reveal", post(handlers::reveal_key))
+        .route("/v1/swap/:swap_id/cancel", post(handlers::cancel_swap))
+        .route("/v1/swap/:swap_id/cancel-expired", post(handlers::cancel_expired_swap))
+        .route("/v1/swap/:swap_id", get(handlers::get_swap))
         .with_state(schema)
+        .layer(middleware::from_fn(versioning::version_negotiation))
         .layer(middleware::from_fn(metrics::track));
 
     let listener = tokio::net::TcpListener::bind("0.0.0.0:8080").await.unwrap();
     println!("Swagger UI   -> http://localhost:8080/docs");
     println!("OpenAPI JSON -> http://localhost:8080/openapi.json");
     println!("Metrics      -> http://localhost:8080/metrics");
+    println!("API Version  -> {}", versioning::CURRENT_VERSION);
     axum::serve(listener, app).await.unwrap();
 }
 
 fn build_app() -> Router {
     let schema = graphql::build_schema();
     Router::new()
-        .route("/graphql", post(graphql_handler))
-        .route("/ip/commit", post(handlers::commit_ip))
-        .route("/ip/{ip_id}", get(handlers::get_ip))
-        .route("/ip/transfer", post(handlers::transfer_ip))
-        .route("/ip/verify", post(handlers::verify_commitment))
-        .route("/ip/owner/{owner}", get(handlers::list_ip_by_owner))
-        .route("/swap/initiate", post(handlers::initiate_swap))
-        .route("/swap/batch-initiate", post(handlers::batch_initiate_swap))
-        .route("/swap/{swap_id}/accept", post(handlers::accept_swap))
-        .route("/swap/{swap_id}/reveal", post(handlers::reveal_key))
-        .route("/swap/{swap_id}/cancel", post(handlers::cancel_swap))
-        .route("/swap/{swap_id}/cancel-expired", post(handlers::cancel_expired_swap))
-        .route("/swap/{swap_id}", get(handlers::get_swap))
+        .route("/v1/graphql", post(graphql_handler))
+        .route("/v1/ip/commit", post(handlers::commit_ip))
+        .route("/v1/ip/:ip_id", get(handlers::get_ip))
+        .route("/v1/ip/transfer", post(handlers::transfer_ip))
+        .route("/v1/ip/verify", post(handlers::verify_commitment))
+        .route("/v1/ip/owner/:owner", get(handlers::list_ip_by_owner))
+        .route("/v1/swap/initiate", post(handlers::initiate_swap))
+        .route("/v1/swap/bulk/initiate", post(handlers::batch_initiate_swap))
+        .route("/v1/swap/:swap_id/accept", post(handlers::accept_swap))
+        .route("/v1/swap/:swap_id/reveal", post(handlers::reveal_key))
+        .route("/v1/swap/:swap_id/cancel", post(handlers::cancel_swap))
+        .route("/v1/swap/:swap_id/cancel-expired", post(handlers::cancel_expired_swap))
+        .route("/v1/swap/:swap_id", get(handlers::get_swap))
         .with_state(schema)
+        .layer(middleware::from_fn(versioning::version_negotiation))
         .layer(middleware::from_fn(require_json_content_type))
 }
 
@@ -159,7 +164,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/ip/commit")
+                    .uri("/v1/ip/commit")
                     .body(Body::from(r#"{"owner":"G123","commitment_hash":"abc"}"#))
                     .unwrap(),
             )
@@ -175,7 +180,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/ip/commit")
+                    .uri("/v1/ip/commit")
                     .header("content-type", "text/plain")
                     .body(Body::from(r#"{"owner":"G123","commitment_hash":"abc"}"#))
                     .unwrap(),
@@ -192,7 +197,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/ip/commit")
+                    .uri("/v1/ip/commit")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"owner":"G123","commitment_hash":"abc"}"#))
                     .unwrap(),
@@ -210,7 +215,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri("/ip/1")
+                    .uri("/v1/ip/1")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -251,7 +256,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri("/ip/owner/GADDR?limit=10&offset=0")
+                    .uri("/v1/ip/owner/GADDR?limit=10&offset=0")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -272,7 +277,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri("/ip/owner/GADDR")
+                    .uri("/v1/ip/owner/GADDR")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -290,7 +295,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri("/ip/1")
+                    .uri("/v1/ip/1")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -307,7 +312,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("GET")
-                    .uri("/swap/1")
+                    .uri("/v1/swap/1")
                     .body(Body::empty())
                     .unwrap(),
             )
@@ -325,7 +330,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/swap/batch-initiate")
+                    .uri("/v1/swap/bulk/initiate")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"ip_registry_id":"C1","ip_ids":[1,2],"seller":"G1","prices":[100],"buyer":"G2","token":"C2"}"#))
                     .unwrap(),
@@ -345,7 +350,7 @@ mod tests {
             .oneshot(
                 Request::builder()
                     .method("POST")
-                    .uri("/swap/batch-initiate")
+                    .uri("/v1/swap/bulk/initiate")
                     .header("content-type", "application/json")
                     .body(Body::from(r#"{"ip_registry_id":"C1","ip_ids":[],"seller":"G1","prices":[],"buyer":"G2","token":"C2"}"#))
                     .unwrap(),
@@ -353,5 +358,58 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(resp.status(), StatusCode::BAD_REQUEST);
+    }
+
+    // ── #319: API Versioning tests ────────────────────────────────────────────
+
+    #[tokio::test]
+    async fn test_api_version_header_present_in_response() {
+        let app = build_app();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/ip/1")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert!(resp.headers().contains_key("API-Version"));
+        assert_eq!(resp.headers().get("API-Version").unwrap(), "1.0.0");
+    }
+
+    #[tokio::test]
+    async fn test_accept_version_header_negotiation() {
+        let app = build_app();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/ip/1")
+                    .header("Accept-Version", "1.0.0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::OK);
+    }
+
+    #[tokio::test]
+    async fn test_unsupported_version_returns_406() {
+        let app = build_app();
+        let resp = app
+            .oneshot(
+                Request::builder()
+                    .method("GET")
+                    .uri("/v1/ip/1")
+                    .header("Accept-Version", "2.0.0")
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        assert_eq!(resp.status(), StatusCode::NOT_ACCEPTABLE);
     }
 }

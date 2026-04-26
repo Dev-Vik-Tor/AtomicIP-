@@ -14,7 +14,7 @@ use crate::webhook;
 /// Timestamp a new IP commitment. Returns the assigned IP ID.
 #[utoipa::path(
     post,
-    path = "/ip/commit",
+    path = "/v1/ip/commit",
     tag = "IP Registry",
     request_body = CommitIpRequest,
     responses(
@@ -36,7 +36,7 @@ pub async fn commit_ip(Json(body): Json<CommitIpRequest>) -> Result<Json<u64>, (
 /// Retrieve an IP record by ID.
 #[utoipa::path(
     get,
-    path = "/ip/{ip_id}",
+    path = "/v1/ip/{ip_id}",
     tag = "IP Registry",
     params(("ip_id" = u64, Path, description = "IP record identifier")),
     responses(
@@ -67,7 +67,7 @@ pub async fn get_ip(Path(ip_id): Path<u64>) -> impl IntoResponse {
 /// Transfer IP ownership to a new address.
 #[utoipa::path(
     post,
-    path = "/ip/transfer",
+    path = "/v1/ip/transfer",
     tag = "IP Registry",
     request_body = TransferIpRequest,
     responses(
@@ -91,7 +91,7 @@ pub async fn transfer_ip(Json(body): Json<TransferIpRequest>) -> Result<StatusCo
 /// Verify a Pedersen commitment: sha256(secret || blinding_factor) == commitment_hash.
 #[utoipa::path(
     post,
-    path = "/ip/verify",
+    path = "/v1/ip/verify",
     tag = "IP Registry",
     request_body = VerifyCommitmentRequest,
     responses(
@@ -114,7 +114,7 @@ pub async fn verify_commitment(Json(body): Json<VerifyCommitmentRequest>) -> Res
 /// Supports `limit` and `offset` query parameters for pagination (#317).
 #[utoipa::path(
     get,
-    path = "/ip/owner/{owner}",
+    path = "/v1/ip/owner/{owner}",
     tag = "IP Registry",
     params(
         ("owner" = String, Path, description = "Stellar address of the owner"),
@@ -168,7 +168,7 @@ pub async fn list_ip_by_owner(
 /// Seller initiates a patent sale. Returns the swap ID.
 #[utoipa::path(
     post,
-    path = "/swap/initiate",
+    path = "/v1/swap/initiate",
     tag = "Atomic Swap",
     request_body = InitiateSwapRequest,
     responses(
@@ -190,7 +190,7 @@ pub async fn initiate_swap(Json(body): Json<InitiateSwapRequest>) -> Result<Json
 /// Seller initiates multiple patent sales in one call. Returns a list of swap IDs (#309).
 #[utoipa::path(
     post,
-    path = "/swap/batch-initiate",
+    path = "/v1/swap/batch-initiate",
     tag = "Atomic Swap",
     request_body = BatchInitiateSwapRequest,
     responses(
@@ -228,7 +228,7 @@ pub async fn batch_initiate_swap(Json(body): Json<BatchInitiateSwapRequest>) -> 
 /// Buyer accepts a pending swap.
 #[utoipa::path(
     post,
-    path = "/swap/{swap_id}/accept",
+    path = "/v1/swap/{swap_id}/accept",
     tag = "Atomic Swap",
     params(("swap_id" = u64, Path, description = "Swap identifier")),
     request_body = AcceptSwapRequest,
@@ -255,7 +255,7 @@ pub async fn accept_swap(Path(swap_id): Path<u64>, Json(body): Json<AcceptSwapRe
 /// Seller reveals the decryption key; payment releases and swap completes.
 #[utoipa::path(
     post,
-    path = "/swap/{swap_id}/reveal",
+    path = "/v1/swap/{swap_id}/reveal",
     tag = "Atomic Swap",
     params(("swap_id" = u64, Path, description = "Swap identifier")),
     request_body = RevealKeyRequest,
@@ -282,7 +282,7 @@ pub async fn reveal_key(Path(swap_id): Path<u64>, Json(body): Json<RevealKeyRequ
 /// Cancel a pending swap. Only the seller or buyer may cancel.
 #[utoipa::path(
     post,
-    path = "/swap/{swap_id}/cancel",
+    path = "/v1/swap/{swap_id}/cancel",
     tag = "Atomic Swap",
     params(("swap_id" = u64, Path, description = "Swap identifier")),
     request_body = CancelSwapRequest,
@@ -309,7 +309,7 @@ pub async fn cancel_swap(Path(swap_id): Path<u64>, Json(body): Json<CancelSwapRe
 /// Buyer cancels an Accepted swap after the expiry timestamp.
 #[utoipa::path(
     post,
-    path = "/swap/{swap_id}/cancel-expired",
+    path = "/v1/swap/{swap_id}/cancel-expired",
     tag = "Atomic Swap",
     params(("swap_id" = u64, Path, description = "Swap identifier")),
     request_body = CancelExpiredSwapRequest,
@@ -336,7 +336,7 @@ pub async fn cancel_expired_swap(Path(swap_id): Path<u64>, Json(body): Json<Canc
 /// Read a swap record by ID.
 #[utoipa::path(
     get,
-    path = "/swap/{swap_id}",
+    path = "/v1/swap/{swap_id}",
     tag = "Atomic Swap",
     params(("swap_id" = u64, Path, description = "Swap identifier")),
     responses(
@@ -369,7 +369,7 @@ pub async fn get_swap(Path(swap_id): Path<u64>) -> impl IntoResponse {
 /// Register a webhook URL to receive swap event notifications.
 #[utoipa::path(
     post,
-    path = "/webhooks",
+    path = "/v1/webhooks",
     tag = "Webhooks",
     request_body = RegisterWebhookRequest,
     responses(
@@ -400,7 +400,7 @@ pub async fn register_webhook(Json(body): Json<RegisterWebhookRequest>) -> Resul
 /// Unregister a webhook by ID.
 #[utoipa::path(
     delete,
-    path = "/webhooks/{id}",
+    path = "/v1/webhooks/{id}",
     tag = "Webhooks",
     params(("id" = String, Path, description = "Webhook UUID")),
     responses(
